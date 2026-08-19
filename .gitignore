@@ -6,6 +6,8 @@ val_data/
 test_data/
 models/
 
+results/
+
 .venv/
 venv/
 __pycache__/
