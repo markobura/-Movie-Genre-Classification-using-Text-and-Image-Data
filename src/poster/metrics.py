@@ -3,7 +3,7 @@ from sklearn.metrics import average_precision_score
 
 from .config import GENRES
 
-
+# https://scikit-learn.org/stable/modules/generated/sklearn.metrics.average_precision_score.html
 def compute_ap_metrics(y_true: np.ndarray, y_score: np.ndarray) -> dict:
     """Multi-label metrics: macro/micro/sample AP and per-genre AP."""
     y_true = np.asarray(y_true, dtype=np.float32)
