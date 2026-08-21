@@ -26,3 +26,16 @@ def replace_vgg_classifier(model, num_classes=len(GENRES)):
     )
     return model
 
+
+def build_vgg16_stanford(num_classes=len(GENRES)):
+    model = load_vgg16_imagenet()
+    freeze_vgg_features(model)
+    replace_vgg_classifier(model, num_classes)
+    return model
+
+
+def build_model(backbone: str, num_classes=len(GENRES)):
+    if backbone == "vgg16_stanford":
+        return build_vgg16_stanford(num_classes)
+    raise ValueError(f"Unknown backbone: {backbone}")
+
