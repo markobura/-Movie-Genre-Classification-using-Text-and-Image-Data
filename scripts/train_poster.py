@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import sys
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from poster.config import BACKBONES, ROOT as PROJECT_ROOT
+from poster.config import BACKBONES, GENRES, ROOT as PROJECT_ROOT
 from poster.dataset import PosterDataset
 from poster.models import build_model
 from poster.transforms import get_transforms
@@ -21,6 +24,13 @@ def resolve_device(name: str) -> torch.device:
     if name == "cuda" and torch.cuda.is_available():
         return torch.device("cuda")
     return torch.device("cpu")
+
+
+def compute_pos_weight(labels_df: pd.DataFrame) -> torch.Tensor:
+    n = len(labels_df)
+    counts = labels_df[GENRES].sum().values.astype(np.float32)
+    weights = (n - counts) / np.maximum(counts, 1.0)
+    return torch.tensor(weights, dtype=torch.float32)
 
 
 def main():
@@ -49,8 +59,25 @@ def main():
 
     model = build_model(args.backbone).to(device)
 
+    results_dir = PROJECT_ROOT / "results" / "poster"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    train_labels = pd.read_csv(args.train_dir / "train_labels.csv")
+    pos_weight = compute_pos_weight(train_labels)
+
+    weights_path = results_dir / "class_weights.json"
+    with open(weights_path, "w") as f:
+        json.dump(
+            {g: float(w) for g, w in zip(GENRES, pos_weight.tolist())},
+            f,
+            indent=2,
+        )
+
     print(f"device={device} train={len(train_ds)} val={len(val_ds)}")
     print(f"model on {next(model.parameters()).device}")
+    print(f"class weights saved to {weights_path}")
+    for genre in GENRES[:3]:
+        print(f"  {genre}: pos_weight={pos_weight[GENRES.index(genre)].item():.2f}")
 
 
 if __name__ == "__main__":
