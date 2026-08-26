@@ -7,7 +7,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -33,6 +35,23 @@ def compute_pos_weight(labels_df: pd.DataFrame) -> torch.Tensor:
     return torch.tensor(weights, dtype=torch.float32)
 
 
+def train_one_epoch(model, loader, criterion, device, optimizer):
+    model.train()
+    total_loss = 0.0
+    for images, labels, _ in tqdm(loader, leave=False, desc="train"):
+        images = images.to(device)
+        labels = labels.to(device)
+
+        optimizer.zero_grad()
+        logits = model(images)
+        loss = criterion(logits, labels)
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item() * images.size(0)
+    return total_loss / len(loader.dataset)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--backbone", default="vgg16_stanford", choices=BACKBONES)
@@ -40,6 +59,8 @@ def main():
     parser.add_argument("--val-dir", type=Path, default=PROJECT_ROOT / "val_data")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--device", default="mps", choices=["mps", "cuda", "cpu"])
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--epochs", type=int, default=50)
     args = parser.parse_args()
 
     device = resolve_device(args.device)
@@ -78,6 +99,19 @@ def main():
     print(f"class weights saved to {weights_path}")
     for genre in GENRES[:3]:
         print(f"  {genre}: pos_weight={pos_weight[GENRES.index(genre)].item():.2f}")
+
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(device))
+    optimizer = torch.optim.Adam(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=args.lr,
+        weight_decay=0.0,
+    )
+
+    for epoch in range(1, args.epochs + 1):
+        train_loss = train_one_epoch(
+            model, train_loader, criterion, device, optimizer
+        )
+        print(f"epoch {epoch:02d} train_loss={train_loss:.4f}")
 
 
 if __name__ == "__main__":

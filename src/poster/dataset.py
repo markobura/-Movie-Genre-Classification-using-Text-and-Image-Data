@@ -1,10 +1,13 @@
 from pathlib import Path
 
 import pandas as pd
-from PIL import Image
+from PIL import Image, PngImagePlugin
 from torch.utils.data import Dataset
 
 from .config import GENRES
+
+# PNG posters with large metadata exceed PIL's default chunk limit
+PngImagePlugin.MAX_TEXT_CHUNK = 10 * 1024 * 1024
 
 
 class PosterDataset(Dataset):
