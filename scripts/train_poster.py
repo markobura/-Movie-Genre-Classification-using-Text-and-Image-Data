@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import random
 import sys
 from pathlib import Path
 
@@ -27,6 +28,26 @@ def resolve_device(name: str) -> torch.device:
     if name == "cuda" and torch.cuda.is_available():
         return torch.device("cuda")
     return torch.device("cpu")
+
+
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def save_checkpoint(path: Path, model, epoch: int, backbone: str, val_macro_ap: float):
+    torch.save(
+        {
+            "epoch": epoch,
+            "backbone": backbone,
+            "val_macro_ap": val_macro_ap,
+            "model_state_dict": model.state_dict(),
+        },
+        path,
+    )
 
 
 def compute_pos_weight(labels_df: pd.DataFrame) -> torch.Tensor:
@@ -89,7 +110,20 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--patience", type=int, default=5)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Checkpoint dir (default: models/poster/<backbone>)",
+    )
     args = parser.parse_args()
+
+    set_seed(args.seed)
+    output_dir = args.output_dir or PROJECT_ROOT / "models" / "poster" / args.backbone
+    output_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = output_dir / "best.pt"
+    history_path = output_dir / "history.json"
 
     device = resolve_device(args.device)
     transform = get_transforms(args.backbone, train=True)
@@ -99,8 +133,15 @@ def main():
         args.val_dir, transform=get_transforms(args.backbone, train=False)
     )
 
+    train_generator = torch.Generator()
+    train_generator.manual_seed(args.seed)
+
     train_loader = DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True, pin_memory=False
+        train_ds,
+        batch_size=args.batch_size,
+        shuffle=True,
+        pin_memory=False,
+        generator=train_generator,
     )
     val_loader = DataLoader(
         val_ds, batch_size=args.batch_size, shuffle=False, pin_memory=False
@@ -123,6 +164,7 @@ def main():
         )
 
     print(f"device={device} train={len(train_ds)} val={len(val_ds)}")
+    print(f"output_dir={output_dir}")
     print(f"model on {next(model.parameters()).device}")
     print(f"class weights saved to {weights_path}")
     for genre in GENRES[:3]:
@@ -136,7 +178,9 @@ def main():
     )
 
     best_macro_ap = 0.0
+    best_epoch = 0
     epochs_without_improvement = 0
+    history = []
 
     for epoch in range(1, args.epochs + 1):
         train_loss = train_one_epoch(
@@ -145,6 +189,15 @@ def main():
         val_loss, metrics = evaluate(model, val_loader, criterion, device)
         val_macro_ap = metrics["macro_ap"]
 
+        history.append(
+            {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "val_macro_ap": val_macro_ap,
+            }
+        )
+
         print(
             f"epoch {epoch:02d} train_loss={train_loss:.4f} "
             f"val_loss={val_loss:.4f} val_macro_ap={val_macro_ap:.4f}"
@@ -152,16 +205,36 @@ def main():
 
         if val_macro_ap > best_macro_ap:
             best_macro_ap = val_macro_ap
+            best_epoch = epoch
             epochs_without_improvement = 0
+            save_checkpoint(
+                checkpoint_path, model, epoch, args.backbone, val_macro_ap
+            )
+            print(f"  saved best checkpoint (val_macro_ap={val_macro_ap:.4f})")
         else:
             epochs_without_improvement += 1
 
         if epochs_without_improvement >= args.patience:
             print(
                 f"early stopping at epoch {epoch} "
-                f"(best val_macro_ap={best_macro_ap:.4f})"
+                f"(best val_macro_ap={best_macro_ap:.4f} at epoch {best_epoch})"
             )
             break
+
+    with open(history_path, "w") as f:
+        json.dump(
+            {
+                "backbone": args.backbone,
+                "seed": args.seed,
+                "best_epoch": best_epoch,
+                "best_val_macro_ap": best_macro_ap,
+                "epochs": history,
+            },
+            f,
+            indent=2,
+        )
+    print(f"history saved to {history_path}")
+    print(f"best checkpoint: {checkpoint_path} (epoch {best_epoch})")
 
 
 if __name__ == "__main__":
