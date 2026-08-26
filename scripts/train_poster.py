@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from poster.config import BACKBONES, GENRES, ROOT as PROJECT_ROOT
 from poster.dataset import PosterDataset
+from poster.metrics import compute_ap_metrics
 from poster.models import build_model
 from poster.transforms import get_transforms
 
@@ -52,6 +53,32 @@ def train_one_epoch(model, loader, criterion, device, optimizer):
     return total_loss / len(loader.dataset)
 
 
+def evaluate(model, loader, criterion, device):
+    model.eval()
+    total_loss = 0.0
+    y_true_batches = []
+    y_score_batches = []
+
+    for images, labels, _ in tqdm(loader, leave=False, desc="val"):
+        images = images.to(device)
+        labels = labels.to(device)
+
+        with torch.no_grad():
+            logits = model(images)
+            loss = criterion(logits, labels)
+            probs = torch.sigmoid(logits)
+
+        total_loss += loss.item() * images.size(0)
+        y_true_batches.append(labels.cpu().numpy())
+        y_score_batches.append(probs.cpu().numpy())
+
+    y_true = np.concatenate(y_true_batches, axis=0)
+    y_score = np.concatenate(y_score_batches, axis=0)
+    val_loss = total_loss / len(loader.dataset)
+    metrics = compute_ap_metrics(y_true, y_score)
+    return val_loss, metrics
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--backbone", default="vgg16_stanford", choices=BACKBONES)
@@ -61,6 +88,7 @@ def main():
     parser.add_argument("--device", default="mps", choices=["mps", "cuda", "cpu"])
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--patience", type=int, default=5)
     args = parser.parse_args()
 
     device = resolve_device(args.device)
@@ -107,11 +135,33 @@ def main():
         weight_decay=0.0,
     )
 
+    best_macro_ap = 0.0
+    epochs_without_improvement = 0
+
     for epoch in range(1, args.epochs + 1):
         train_loss = train_one_epoch(
             model, train_loader, criterion, device, optimizer
         )
-        print(f"epoch {epoch:02d} train_loss={train_loss:.4f}")
+        val_loss, metrics = evaluate(model, val_loader, criterion, device)
+        val_macro_ap = metrics["macro_ap"]
+
+        print(
+            f"epoch {epoch:02d} train_loss={train_loss:.4f} "
+            f"val_loss={val_loss:.4f} val_macro_ap={val_macro_ap:.4f}"
+        )
+
+        if val_macro_ap > best_macro_ap:
+            best_macro_ap = val_macro_ap
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
+        if epochs_without_improvement >= args.patience:
+            print(
+                f"early stopping at epoch {epoch} "
+                f"(best val_macro_ap={best_macro_ap:.4f})"
+            )
+            break
 
 
 if __name__ == "__main__":
