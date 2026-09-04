@@ -7,3 +7,4 @@ tqdm>=4.65
 matplotlib>=3.7
 jupyter>=1.0
 numpy>=1.24
+transformers>=4.36

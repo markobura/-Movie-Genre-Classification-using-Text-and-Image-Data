@@ -15,7 +15,12 @@ from tqdm import tqdm
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from poster.config import BACKBONES, GENRES, ROOT as PROJECT_ROOT
+from poster.config import (
+    BACKBONE_WEIGHT_DECAY,
+    BACKBONES,
+    GENRES,
+    ROOT as PROJECT_ROOT,
+)
 from poster.dataset import PosterDataset
 from poster.metrics import compute_ap_metrics
 from poster.models import build_model
@@ -110,6 +115,12 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--patience", type=int, default=5)
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=None,
+        help="Adam weight decay (default: per-backbone from config)",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--output-dir",
@@ -170,12 +181,19 @@ def main():
     for genre in GENRES[:3]:
         print(f"  {genre}: pos_weight={pos_weight[GENRES.index(genre)].item():.2f}")
 
+    weight_decay = (
+        args.weight_decay
+        if args.weight_decay is not None
+        else BACKBONE_WEIGHT_DECAY.get(args.backbone, 0.0)
+    )
+
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(device))
     optimizer = torch.optim.Adam(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=args.lr,
-        weight_decay=0.0,
+        weight_decay=weight_decay,
     )
+    print(f"weight_decay={weight_decay}")
 
     best_macro_ap = 0.0
     best_epoch = 0
