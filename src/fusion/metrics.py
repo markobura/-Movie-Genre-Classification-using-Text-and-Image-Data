@@ -33,7 +33,6 @@ def build_comparison_table(
     table = results_table(rows)
     if include_paper:
         paper = PAPER_RESULTS.copy()
-        paper.index = [f"{idx} (rad)" for idx in paper.index]
         table = pd.concat([table, paper[["AP_micro", "AP_macro", "AP_samples"]]])
     return table
 

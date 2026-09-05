@@ -8,3 +8,5 @@ matplotlib>=3.7
 jupyter>=1.0
 numpy>=1.24
 transformers>=4.36
+sentence-transformers>=2.2
+joblib>=1.3
