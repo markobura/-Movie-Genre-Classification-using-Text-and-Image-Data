@@ -2,7 +2,7 @@
 
 Multi-label classification of 13 MovieScope genres from **plot synopses** and **posters**, then fusion of the two. Reference: LeBaron, Stanford CS230, [Multi-label Movie Genre Classification Using Multiple Modalities](http://cs230.stanford.edu/projects_fall_2021/reports/102983714.pdf).
 
-The paper uses four modalities (poster, video, metadata, text). We use plot + poster only. Video trailers are not in the dump as files we can train on (no frames or clips on disk, and they are not straightforward to get). Metadata exists as a tabular CSV (budget, year, IMDb score, and similar), but in the paper it is the weakest modality (0.457 macro AP), so we did not train a metadata model. Plot text and poster JPGs are complete for every split, so those two are what we use.
+The paper uses four modalities: poster, video, metadata, and text. We use plot synopses and posters. Video is not in the dump as frames or clips, so it was not practical to train. Metadata is in a CSV (budget, year, IMDb score, and similar); in the paper it is the weakest modality (0.457 macro AP), so we skipped it. Plot text and poster images are complete for every split, and that is the pair we train on.
 
 Splits: **3454 / 491 / 989**. Primary metric: **macro Average Precision**.
 
@@ -52,7 +52,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-In Jupyter / Cursor, select the **`.venv`** kernel. Homebrew `python3` does not have `torch`.
+
 
 ## Data
 
