@@ -25,6 +25,7 @@ def train_late_fusion(
     lr: float = 1e-3,
     epochs: int = 100,
     patience: int = 15,
+    eval_every: int = 25,
     seed: int = 42,
     device: torch.device | None = None,
 ) -> tuple[LateFusionHead, dict]:
@@ -53,9 +54,13 @@ def train_late_fusion(
         loss.backward()
         optimizer.step()
 
+       
+        if epoch % eval_every != 0 and epoch != epochs:
+            continue
+
         model.eval()
         with torch.no_grad():
-            probs = torch.sigmoid(logits).cpu().numpy()
+            probs = torch.sigmoid(model(poster_val, text_val)).cpu().numpy()
         metrics = compute_ap_metrics(y_val.cpu().numpy(), probs)
         val_macro_ap = metrics["macro_ap"]
         history.append(
@@ -72,7 +77,7 @@ def train_late_fusion(
             best_state = {k: v.clone() for k, v in model.state_dict().items()}
             epochs_without_improvement = 0
         else:
-            epochs_without_improvement += 1
+            epochs_without_improvement += eval_every
 
         if epochs_without_improvement >= patience:
             break

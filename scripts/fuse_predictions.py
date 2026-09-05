@@ -21,7 +21,9 @@ FUSION_NOTES = (
     "Stanford (LeBaron) combines four modalities (poster, video, metadata, text) "
     "with a final fully-connected fusion layer. Our fusion uses poster + text only. "
     "Fusion is trained on validation predictions, not train, because base models "
-    "are overfit on train (see text_models.ipynb section 11)."
+    "are overfit on train (see notebooks/01_text_classification.ipynb section 11). "
+    "Limitations: the late fusion head is selected on the same 491 val rows it is "
+    "trained on, so best_val_macro_ap is a fit score, not a held-out score."
 )
 
 
@@ -57,8 +59,9 @@ def main():
         / "predictions_test_clip_vit_b32.csv",
     )
     parser.add_argument("--poster-backbone", default="clip_vit_b32")
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--patience", type=int, default=15)
+    parser.add_argument("--epochs", type=int, default=5000)
+    parser.add_argument("--patience", type=int, default=500)
+    parser.add_argument("--eval-every", type=int, default=25)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="cpu", choices=["mps", "cuda", "cpu"])
@@ -76,7 +79,8 @@ def main():
 
     if not args.text_npz.exists():
         raise FileNotFoundError(
-            f"Missing {args.text_npz}. Run text_models.ipynb section 11 to export "
+            f"Missing {args.text_npz}. Run notebooks/01_text_classification.ipynb "
+            "section 11 to export "
             "models/text_predictions.npz."
         )
 
@@ -104,6 +108,7 @@ def main():
         lr=args.lr,
         epochs=args.epochs,
         patience=args.patience,
+        eval_every=args.eval_every,
         seed=args.seed,
         device=device,
     )
