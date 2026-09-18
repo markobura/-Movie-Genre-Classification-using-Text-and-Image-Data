@@ -20,10 +20,7 @@ from poster.inference import resolve_device
 FUSION_NOTES = (
     "Stanford (LeBaron) combines four modalities (poster, video, metadata, text) "
     "with a final fully-connected fusion layer. Our fusion uses poster + text only. "
-    "Fusion is trained on validation predictions, not train, because base models "
-    "are overfit on train (see notebooks/01_text_classification.ipynb section 11). "
-    "Limitations: the late fusion head is selected on the same 491 val rows it is "
-    "trained on, so best_val_macro_ap is a fit score, not a held-out score."
+    "The head is fitted on the train split and the checkpoint is selected on val."
 )
 
 
@@ -58,10 +55,18 @@ def main():
         / "poster"
         / "predictions_test_clip_vit_b32.csv",
     )
+    parser.add_argument(
+        "--poster-train-csv",
+        type=Path,
+        default=PROJECT_ROOT
+        / "results"
+        / "poster"
+        / "predictions_train_clip_vit_b32.csv",
+    )
     parser.add_argument("--poster-backbone", default="clip_vit_b32")
-    parser.add_argument("--epochs", type=int, default=5000)
-    parser.add_argument("--patience", type=int, default=500)
-    parser.add_argument("--eval-every", type=int, default=25)
+    parser.add_argument("--epochs", type=int, default=300)
+    parser.add_argument("--patience", type=int, default=30)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="cpu", choices=["mps", "cuda", "cpu"])
@@ -84,16 +89,27 @@ def main():
             "models/text_predictions.npz."
         )
 
+    if not args.poster_train_csv.exists():
+        raise FileNotFoundError(
+            f"Missing {args.poster_train_csv}. Run:\n"
+            "  python scripts/predict.py --backbone clip_vit_b32 "
+            "--split-dir train_data --device cpu"
+        )
+
     data = load_fusion_inputs(
         args.text_npz,
         args.text_key,
+        args.poster_train_csv,
         args.poster_val_csv,
         args.poster_test_csv,
     )
 
     device = resolve_device(args.device)
     print(f"device={device}")
-    print(f"val={len(data['y_val'])} test={len(data['y_test'])}")
+    print(
+        f"train={len(data['y_train'])} val={len(data['y_val'])} "
+        f"test={len(data['y_test'])}"
+    )
 
     poster_val_t = torch.tensor(data["poster_val"])
     text_val_t = torch.tensor(data["text_val"])
@@ -101,16 +117,18 @@ def main():
     pos_weight = torch.tensor(data["pos_weight"], dtype=torch.float32)
 
     model, train_info = train_late_fusion(
-        poster_val_t,
-        text_val_t,
+        [torch.tensor(data["poster_train"]), torch.tensor(data["text_train"])],
+        torch.tensor(data["y_train"]),
+        [poster_val_t, text_val_t],
         y_val_t,
         pos_weight,
         lr=args.lr,
         epochs=args.epochs,
+        batch_size=args.batch_size,
         patience=args.patience,
-        eval_every=args.eval_every,
         seed=args.seed,
         device=device,
+        verbose=False,
     )
     print(
         f"late fusion trained: best_epoch={train_info['best_epoch']} "
@@ -119,8 +137,7 @@ def main():
 
     fusion_test = predict_fusion(
         model,
-        torch.tensor(data["poster_test"]),
-        torch.tensor(data["text_test"]),
+        [torch.tensor(data["poster_test"]), torch.tensor(data["text_test"])],
         device,
     ).numpy()
 
@@ -150,7 +167,8 @@ def main():
     predictions_df.to_csv(predictions_path, index=False)
 
     checkpoint_path = (
-        args.checkpoint_dir / f"late_fusion_{args.text_key}_{args.poster_backbone}.pt"
+        args.checkpoint_dir
+        / f"late_fusion_{args.text_key}_{args.poster_backbone}.pt"
     )
     torch.save(
         {
