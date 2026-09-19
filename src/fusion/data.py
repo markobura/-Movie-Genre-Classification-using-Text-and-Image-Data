@@ -3,7 +3,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from helpers import GENRES, load_split
+from helpers import GENRES, clean_plot, load_split
+from poster.config import ROOT
 
 TEXT_KEYS = {
     "logreg": ("val_logreg", "test_logreg"),
@@ -46,6 +47,35 @@ def load_text_predictions(
     return val_scores, test_scores
 
 
+def text_train_scores(text_key: str) -> np.ndarray:
+    """Text-model probabilities on the train split.
+
+    `models/text_predictions.npz` holds only val and test, so these are
+    recomputed from the saved sklearn artifacts through the same pipeline
+    notebook 01 used.
+    """
+    import joblib
+
+    models_dir = ROOT / "models"
+    train = load_split("train")
+
+    if text_key == "logreg":
+        vectorizer = joblib.load(models_dir / "tfidf_vectorizer.joblib")
+        logreg = joblib.load(models_dir / "text_logreg.joblib")
+        features = vectorizer.transform(clean_plot(train["plot"]))
+        return logreg.predict_proba(features).astype(np.float32)
+
+    if text_key == "minilm":
+        embeddings = np.load(models_dir / "emb_train.npy")
+        minilm = joblib.load(models_dir / "text_minilm_logreg.joblib")
+        return minilm.predict_proba(embeddings).astype(np.float32)
+
+    raise ValueError(
+        f"text_key={text_key!r} has no saved artifact to score the train split; "
+        "use 'logreg' or 'minilm'"
+    )
+
+
 def align_poster_with_split(
     split: str, movie_ids: np.ndarray, scores: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -71,9 +101,12 @@ def align_poster_with_split(
 def load_fusion_inputs(
     text_npz: Path,
     text_key: str,
+    poster_train_csv: Path,
     poster_val_csv: Path,
     poster_test_csv: Path,
 ) -> dict:
+    """Predictions of both modalities on all three splits, aligned with the
+    label files."""
     val_labels = load_split("val")
     test_labels = load_split("test")
     y_val = val_labels[GENRES].values.astype(np.float32)
@@ -102,13 +135,27 @@ def load_fusion_inputs(
     counts = train_labels[GENRES].sum().values.astype(np.float32)
     pos_weight = (n - counts) / np.maximum(counts, 1.0)
 
+    train_movie_ids, poster_train = align_poster_with_split(
+        "train", *load_poster_predictions(poster_train_csv)
+    )
+    text_train = text_train_scores(text_key)
+    if poster_train.shape != text_train.shape:
+        raise ValueError(
+            f"Train shape mismatch poster {poster_train.shape} "
+            f"vs text {text_train.shape}"
+        )
+
     return {
+        "y_train": train_labels[GENRES].values.astype(np.float32),
         "y_val": y_val,
         "y_test": y_test,
+        "poster_train": poster_train,
         "poster_val": poster_val,
         "poster_test": poster_test,
+        "text_train": text_train,
         "text_val": text_val,
         "text_test": text_test,
+        "train_movie_ids": train_movie_ids,
         "val_movie_ids": val_movie_ids,
         "test_movie_ids": test_movie_ids,
         "pos_weight": pos_weight,

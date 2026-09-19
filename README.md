@@ -16,8 +16,9 @@ Splits: **3454 / 491 / 989**. Primary metric: **macro Average Precision**.
 | Poster | VGG-16, frozen conv (paper setup) | paper replica |
 | Poster | VGG-16 + dropout, augmentations, weight decay | overfitting check |
 | Poster | CLIP ViT-B/32 frozen encoder + linear head | **best poster**, used in fusion |
-| Fusion | Mean of CLIP and TF-IDF probabilities | **reported multimodal result** |
-| Fusion | Linear layer on concatenated probabilities | paper-style late fusion |
+| Fusion | Mean of CLIP and TF-IDF probabilities | parameter-free baseline |
+| Fusion | Linear layer on concatenated probabilities | **best result**, paper-style late fusion |
+| Fusion | CLIP + MiniLM features, last encoder blocks trained with the head | jointly trained multimodal model |
 
 Notebooks (read these for the full argument):
 
@@ -29,16 +30,21 @@ Notebooks (read these for the full argument):
 
 | Model | macro AP | micro AP | sample AP |
 |---|---|---|---|
-| Mean fusion (poster + text) | **0.7479** | 0.7915 | 0.8618 |
+| **Late fusion (poster + text probabilities)** | **0.7592** | 0.8122 | 0.8752 |
+| Mean fusion (poster + text) | 0.7479 | 0.7915 | 0.8618 |
+| Joint fusion (CLIP + MiniLM features) | 0.7387 | 0.7630 | 0.8252 |
 | Text, TF-IDF + LogReg | 0.7268 | 0.7733 | 0.8430 |
-| Late fusion (paper-style linear head) | 0.7066 | 0.7551 | 0.8332 |
 | Poster, CLIP ViT-B/32 | 0.6175 | 0.6219 | 0.7416 |
 | Poster, VGG-16 (paper replica) | 0.4545 | 0.4776 | 0.6000 |
 | Paper, poster | 0.4463 | 0.5201 | 0.6572 |
 | Paper, text | 0.6195 | 0.6317 | 0.7497 |
 | Paper, combined (4 modalities) | 0.5641 | 0.6270 | 0.7358 |
 
-We report **mean fusion** (0.7479). Averaging poster and text probabilities beats both unimodal models and the trained late-fusion layer (0.7066). The layer overfits on 491 val examples (0.7797 fit AP vs 0.7066 test). Poster gain is concentrated on visual genres (`animation` +0.152 over text, also `comedy` and `family`); on `biography` the poster hurts.
+We report **late fusion** (0.7592): the paper's linear layer over the 26 output probabilities, fitted on the 3454 train movies with the checkpoint selected on val. It is above mean fusion (+0.011) and above the best single model (+0.033), because it can weight the modalities per genre instead of at 50/50.
+
+**Joint fusion** (0.7387) fuses features instead of probabilities: a 512-dim CLIP embedding and a 384-dim MiniLM embedding, with the last CLIP block and the last two MiniLM blocks training together with the head (11.5M of 111M parameters). It is the best model in the project on the genres the poster carries (`animation` 0.841 against 0.657 for late fusion, `family` 0.850, `comedy` 0.910) and loses on the ones the synopsis carries (`crime` 0.687 against 0.779, `horror`, `mystery`). The cause is the text branch: TF-IDF + logistic regression is not a neural encoder and has no layers to fine-tune, so joint training has to use MiniLM, which alone is 0.155 macro AP weaker because 80% of the synopses exceed its 256-token window (`01_text_classification.ipynb`, section 12).
+
+Poster gain is concentrated on visual genres (`animation` +0.118 over text for late fusion, also `comedy` and `family`); on `biography` the poster hurts.
 
 Limitation: their Combined score uses four modalities, ours uses two, so those numbers are not the same comparison. Same-modality: CLIP poster 0.6175 vs paper poster 0.446, TF-IDF text 0.7268 vs paper GloVe MLP 0.6195.
 
@@ -100,24 +106,36 @@ CLIP is a frozen encoder plus a linear head. Best checkpoint is epoch 1 (the hea
 
 ## Reproduce fusion
 
-Needs text `npz` from notebook 01 and CLIP val + test probability CSVs:
+Mean fusion and late fusion need the text `npz` from notebook 01 and CLIP probability CSVs for all three splits:
 
 ```bash
+python scripts/predict.py --backbone clip_vit_b32 --split-dir train_data --device mps --batch-size 16
 python scripts/predict.py --backbone clip_vit_b32 --split-dir val_data --device mps --batch-size 16
 python scripts/predict.py --backbone clip_vit_b32 --split-dir test_data --device mps --batch-size 16
+
 python scripts/fuse_predictions.py --device cpu
 ```
 
-Writes `results/fusion/comparison_test.csv` and `test_metrics.json`. Walkthrough: `notebooks/03_fusion.ipynb`.
+The head is fitted on train and the checkpoint is selected on val, so `best_val_macro_ap` is a held-out score. Text probabilities on train are recomputed from `models/tfidf_vectorizer.joblib` + `models/text_logreg.joblib`, because notebook 01 exports only val and test. Outputs: `results/fusion/comparison_test.csv` and `test_metrics.json`.
 
-Fusion is trained on **validation** predictions, not train (base models are overfit on train). Default late fusion: 5000 full-batch Adam steps.
+## Reproduce joint fusion
+
+Joint fusion needs no precomputed predictions - it reads posters and synopses directly and trains CLIP, MiniLM and the fusion head in one graph:
+
+```bash
+python scripts/train_joint_fusion.py --device mps
+```
+
+Trains on `train_data`, selects the checkpoint on `val_data`, reports on `test_data`. Defaults: last 1 of 12 CLIP blocks and last 2 of 6 MiniLM blocks trainable, batch 16, encoder lr 2e-5, head lr 1e-3, linear warmup/decay, up to 8 epochs with patience 3. About 12.5 min per epoch on 8 CPU cores (79 min total, best epoch 3); much faster on `--device cuda`/`mps`. Outputs go to `results/fusion/joint/` and `models/fusion/`.
+
+Walkthrough for both: `notebooks/03_fusion.ipynb`.
 
 ## Layout
 
 ```
 helpers/                 shared genres, splits, AP, paper numbers
 src/poster/              VGG-16 and CLIP models, datasets, metrics
-src/fusion/              load aligned predictions, late fusion head
-scripts/                 train / evaluate / predict / fuse / split
+src/fusion/              aligned predictions, fusion head, joint CLIP+MiniLM model
+scripts/                 train / evaluate / predict / fuse / train_joint_fusion / split
 notebooks/               01 text, 02 poster, 03 fusion
 ```
